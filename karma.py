@@ -4,7 +4,7 @@ from cloudbot.util import timeformat, formatting, botvars
 import time
 import re
 
-CAN_DOWNVOTE = False
+CAN_DOWNVOTE = True
 
 from sqlalchemy import Table, Column, Integer, Float, String, PrimaryKeyConstraint
 from sqlalchemy import select
@@ -87,9 +87,9 @@ karma_re = re.compile('^([a-z0-9_\-\[\]\\^{}|`]+)(\+\+|\-\-)$', re.I)
 def karma_add(match, nick, db, notice):
     nick_vote = match.group(1).strip().replace("+", "")
     if nick.lower() == nick_vote.lower():
-        notice("You can't vote on yourself!")
+        return "You can't vote on yourself!"
         return
-    if len(nick_vote) < 3 or " " in nick_vote:
+    if len(nick_vote) < 1 or " " in nick_vote:
         return  # ignore anything below 3 chars in length or with spaces
 
     vote_allowed, when = allowed(db, nick, nick_vote)
@@ -102,7 +102,7 @@ def karma_add(match, nick, db, notice):
                        total_karma) values(:nick,0,0,0)""", {'nick': nick_vote.lower()})
             db.commit()
             up(db, nick_vote)
-            notice("Gave {} 1 karma!".format(nick_vote))
+            return "Gave {} 1 karma!".format(nick_vote)
         if match.group(2) == '--' and CAN_DOWNVOTE:
             db.execute("""INSERT or IGNORE INTO karma(
                        nick_vote,
@@ -112,30 +112,47 @@ def karma_add(match, nick, db, notice):
             db.commit()
             down(db, nick_vote)
 
-            notice("Took away 1 karma from {}.".format(nick_vote))
+            return "Took away 1 karma from {}.".format(nick_vote)
         else:
             return
     else:
-        notice("You are trying to vote too often. You can vote on this user again in {}!".format(when))
+        return "You are trying to vote too often. You can vote on this user again in {}!".format(when)
 
 
 @hook.command('karma', 'k')
 def karma(text, chan, db):
-    """k/karma <nick> -- returns karma stats for <nick>"""
+    """k/karma <nick> | list -- returns karma stats for <nick>. list returns top 5 karma."""
 
     if not chan.startswith('#'):
         return
 
     nick_vote = text
 
-    query = db.execute(
-        select([karma_table])
-        .where(karma_table.c.nick_vote == nick_vote.lower())
-    ).fetchall()
+    if nick_vote != "list":
 
-    if not query:
-        return "That user has no karma."
+        query = db.execute(
+            select([karma_table])
+            .where(karma_table.c.nick_vote == nick_vote.lower())
+        ).fetchall()
+
+        if not query:
+            return "That user has no karma."
+        else:
+            query = query[0]
+            karma_text = formatting.pluralize(query['up_karma'] - query['down_karma'], 'karma point')
+            return "{} has {}.".format(nick_vote, karma_text)
     else:
-        query = query[0]
-        karma_text = formatting.pluralize(query['up_karma'] - query['down_karma'], 'karma point')
-        return "{} has {}.".format(nick_vote, karma_text)
+        query = db.execute(
+            select([karma_table]).order_by(karma_table.c.total_karma.desc()).limit(5)
+        ).fetchall()
+
+        if not query:
+            return "No karma registered yet."
+        else:
+            output = "Five users with most karma:"
+            for q in query:
+                total_karma = str(q['total_karma'])
+                nick_vote = str(q['nick_vote'])
+                output += "\n" + nick_vote + " has " + total_karma + " karma."
+
+            return output
